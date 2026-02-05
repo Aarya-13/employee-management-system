@@ -1,44 +1,52 @@
 # ===============================
-# 1) BUILD STAGE
+# 1) BUILD STAGE (Debian slim)
 # ===============================
-FROM node:20-alpine AS builder
+FROM node:20-slim AS builder
 
 WORKDIR /app
 
-# Force devDependencies installation (vite lives here)
+# Force devDependencies installation (vite is a devDependency)
 ENV NODE_ENV=development
 
-# Install dependencies
+# Copy only package manifests for better caching
 COPY frontend/package*.json ./
+
+# Install deps including dev deps
 RUN npm ci --include=dev
 
-# Copy project files
+# Copy the rest of the frontend source
 COPY frontend/ ./
 
-# FIX vite permission bug for Alpine (very common)
-RUN chmod +x node_modules/.bin/vite
+# Normalize line endings to avoid "Permission denied" on npm shims
+# (harmless if files are already LF)
+RUN apt-get update && apt-get install -y dos2unix && \
+    find node_modules/.bin -maxdepth 1 -type f -exec dos2unix {} \; && \
+    find . -type f \( -name "*.js" -o -name "*.ts" -o -name "*.tsx" -o -name "*.sh" \) -exec dos2unix {} \; && \
+    chmod -R +x node_modules/.bin
 
-# Build the Vite app
+# Optional: verify vite exists and is executable
+RUN ls -l node_modules/.bin/vite && head -n 1 node_modules/.bin/vite
+
+# Build
 RUN npm run build
 
 
 # ===============================
-# 2) PRODUCTION STAGE
+# 2) RUNTIME STAGE
 # ===============================
-FROM node:20-alpine
+FROM node:20-slim
 
 WORKDIR /app
 
-# Install static file server
+# Serve the static build with 'serve'
 RUN npm install -g serve
 
-# Copy built files from builder
+# Copy built assets
 COPY --from=builder /app/dist ./dist
 
 EXPOSE 3000
 
-# Healthcheck
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD wget --quiet --tries=1 --spider http://localhost:3000/ || exit 1
+  CMD wget --quiet --tries=1 --spider http://localhost:3000/ || exit 1
 
 CMD ["serve", "-s", "dist", "-l", "3000"]
